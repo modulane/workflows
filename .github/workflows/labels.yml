@@ -4,12 +4,16 @@ name: Labels
 # changes on main, create the labels that are missing and update the colour
 # and description of the others. Labels that are not in the file are left
 # alone, so removing one is a deliberate step in the repository settings.
+#
+# Other repositories call this workflow (see the README); this repository also
+# runs it for its own labels.
 on:
   push:
     branches: [main]
     paths:
       - .github/labels.json
   workflow_dispatch:
+  workflow_call:
 
 permissions: {}
 

@@ -2,13 +2,26 @@ name: Pull request title
 
 # Pull requests are squash-merged, so the title becomes the commit message on
 # main and decides the release (feat: minor, fix: patch, others none). Check
-# that it follows Conventional Commits before it can be merged.
+# that it follows Conventional Commits before it can be merged. In a monorepo,
+# the package-scope input also checks that a release title names the package
+# it releases: "fix(prettier-config): ..." for packages/prettier-config.
+#
+# Other repositories call this workflow (see the README); this repository also
+# runs it on its own pull requests.
 on:
   pull_request:
     types: [opened, edited, reopened, synchronize]
+  workflow_call:
+    inputs:
+      package-scope:
+        description: >-
+          Require a release title (feat, fix or breaking) to name a package
+          under packages/ that the pull request changes
 
-permissions:
-  pull-requests: read # read the pull request title
+        type: boolean
+        default: false
+
+permissions: {}
 
 # Only the latest title and commit of a pull request matter.
 concurrency:
@@ -21,11 +34,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
+    permissions:
+      contents: read # list the files of a pull request in a private repository
+      pull-requests: read # read the pull request title and its files
+
     steps:
       - name: Check the title
         uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6.1.1
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
         with:
           types: |
             feat
@@ -44,3 +61,48 @@ jobs:
           subjectPatternError: >-
             Start the summary "{subject}" with a lowercase letter, for example
             "feat: add project search".
+
+      # multi-semantic-release releases every package whose folder the commit
+      # changes, whatever the title says. The scope makes that visible: a
+      # feat: or fix: title (or one with "!") must name a package that the
+      # pull request changes, by its folder under packages/.
+      - name: Check the package scope
+        if: inputs.package-scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.pull_request.number }}
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          # The step above reports a title that does not match the format.
+          pattern='^([a-z]+)(\(([^)]*)\))?(!)?: '
+          if [[ ! $TITLE =~ $pattern ]]; then
+            exit 0
+          fi
+          type=${BASH_REMATCH[1]}
+          scope=${BASH_REMATCH[3]}
+          breaking=${BASH_REMATCH[4]}
+
+          if [[ $type != feat && $type != fix && -z $breaking ]]; then
+            echo "A $type: title releases nothing; no package scope needed."
+            exit 0
+          fi
+
+          changed=$(gh api --paginate "repos/$GH_REPO/pulls/$NUMBER/files" --jq '.[].filename' |
+            sed -n 's|^packages/\([^/]*\)/.*|\1|p' | sort -u)
+          list=$(paste -sd ' ' <<< "$changed")
+
+          if [[ -z $changed ]]; then
+            echo "::error::A $type: title releases a package, but this pull request changes none. Use another type, such as docs:, ci: or chore:."
+            exit 1
+          fi
+          if [[ -z $scope ]] || ! grep -qxF "$scope" <<< "$changed"; then
+            echo "::error::Name the package this releases in the title, for example \"$type($(head -n 1 <<< "$changed")): ...\". Packages this pull request changes: $list."
+            exit 1
+          fi
+
+          others=$(grep -vxF "$scope" <<< "$changed" | paste -sd ' ' || true)
+          if [[ -n $others ]]; then
+            echo "::warning::This pull request also changes $others: merging it releases them too, with the same type."
+          fi
+          echo "Releases $scope."

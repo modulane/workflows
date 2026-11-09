@@ -8,9 +8,13 @@ name: AI disclosure
 #
 # modulane/ai-disclosure reads the description from the event and needs no
 # token and no checkout. Dependabot pull requests are exempt.
+#
+# Other repositories call this workflow (see the README); this repository also
+# runs it on its own pull requests.
 on:
   pull_request:
     types: [opened, edited, reopened, synchronize]
+  workflow_call:
 
 permissions: {}
 
@@ -21,9 +25,11 @@ concurrency:
 
 jobs:
   check:
-    name: AI disclosure
+    name: AI use section
     runs-on: ubuntu-latest
     timeout-minutes: 5
+
+    permissions: {}
 
     steps:
       - name: Check the AI use section
