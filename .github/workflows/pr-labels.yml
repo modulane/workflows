@@ -15,9 +15,14 @@ name: Pull request labels
 # never interpolate ${{ github.event.* }} straight into a run: block — pass
 # untrusted fields through env, as below. Either change would let any GitHub
 # user run code or shell commands with this job's write token.
+#
+# Other repositories call this workflow from their own pull_request_target
+# workflow (see the README); this repository also runs it on its own pull
+# requests.
 on:
   pull_request_target: # zizmor: ignore[dangerous-triggers] no pull request code is checked out or run
     types: [opened, edited, reopened]
+  workflow_call:
 
 permissions: {}
 
@@ -85,7 +90,8 @@ jobs:
           done
 
           # Only people with write access can be assigned; GitHub ignores
-          # the request for anyone else.
-          if [[ $ACTION == opened ]]; then
+          # the request for anyone else, but refuses it for a bot such as
+          # Dependabot (HTTP 403), so bots are not assigned.
+          if [[ $ACTION == opened && $AUTHOR != *'[bot]' ]]; then
             gh api "repos/$GH_REPO/issues/$NUMBER/assignees" -f "assignees[]=$AUTHOR" > /dev/null
           fi
