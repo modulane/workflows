@@ -1,0 +1,74 @@
+name: Repo check
+
+# Compare the repository with modulane/repo-template, as modulane/repo-check
+# does, and keep one pull request open with what a file change can bring
+# back: pins, shared workflows, labels, Dependabot and the other copied
+# files. The pull request is updated when the fixes change and closed once
+# there is nothing left to fix, as Dependabot does for dependencies. Drift
+# that only a maintainer can fix, such as a ruleset or a repository setting,
+# fails the run, and its summary lists it.
+#
+# The pull request changes workflows, and its checks must run, which
+# GITHUB_TOKEN can do neither of. So the job uses a token of the modulane
+# repo-check GitHub App, limited to the repository it runs in.
+#
+# Other repositories call this workflow on a schedule (see the README); this
+# repository runs it the same way, from the organization's variable and
+# secret.
+on:
+  workflow_call:
+    inputs:
+      client-id:
+        description: The client ID of the repo-check GitHub App.
+        type: string
+        required: true
+      reference:
+        description: The reference setup to compare with, as owner/repo[@ref].
+        type: string
+        default: modulane/repo-template
+    secrets:
+      private-key:
+        description: The private key of the repo-check GitHub App.
+        required: true
+  schedule:
+    - cron: '0 5 * * 1'
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  repo-check:
+    name: Compare with repo-template
+    # The reference is never compared with itself.
+    if: github.repository != (inputs.reference || 'modulane/repo-template')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    # Two runs would race on the same branch and pull request.
+    concurrency:
+      group: repo-check
+      cancel-in-progress: false
+
+    # The App token does the work, GITHUB_TOKEN nothing.
+    permissions: {}
+
+    steps:
+      - name: Create a GitHub App token
+        id: token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ inputs.client-id || vars.REPO_CHECK_CLIENT_ID }}
+          private-key: ${{ secrets.private-key || secrets.REPO_CHECK_PRIVATE_KEY }}
+          permission-administration: read # read the rulesets and the merge settings
+          permission-contents: write # commit the fixes to the repo-check branch
+          permission-pull-requests: write # open, update and close the pull request
+          permission-workflows: write # change files under .github/workflows
+
+      # The action reads the repository and the reference through the API, so
+      # nothing is checked out.
+      - name: Compare and open a pull request
+        uses: modulane/repo-check@09d2f752830ef189967748604d76531de59249fb # v1.0.0
+        with:
+          token: ${{ steps.token.outputs.token }}
+          reference: ${{ inputs.reference || 'modulane/repo-template' }}
+          pull-request: true

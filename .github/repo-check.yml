@@ -1,0 +1,6 @@
+# Differences from modulane/repo-template that this repository keeps on
+# purpose. modulane/repo-check accepts them instead of reporting them, and
+# reports an entry here once it no longer matches anything.
+accept:
+  - finding: 'rulesets:main ruleset:required_status_checks.required_status_checks'
+    reason: This repository runs its workflows directly instead of calling them, so its required checks have no caller prefix, such as "AI use section" for "AI disclosure / AI use section".
