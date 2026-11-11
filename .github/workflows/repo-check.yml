@@ -22,6 +22,10 @@ on:
         description: The client ID of the repo-check GitHub App.
         type: string
         required: true
+      reference:
+        description: The reference setup to compare with, as owner/repo[@ref].
+        type: string
+        default: modulane/repo-template
     secrets:
       private-key:
         description: The private key of the repo-check GitHub App.
@@ -35,8 +39,8 @@ permissions: {}
 jobs:
   repo-check:
     name: Compare with repo-template
-    # The template is the reference itself.
-    if: github.repository != 'modulane/repo-template'
+    # The reference is never compared with itself.
+    if: github.repository != (inputs.reference || 'modulane/repo-template')
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -66,4 +70,5 @@ jobs:
         uses: modulane/repo-check@0000000000000000000000000000000000000000 # v1.0.0
         with:
           token: ${{ steps.token.outputs.token }}
+          reference: ${{ inputs.reference || 'modulane/repo-template' }}
           pull-request: true

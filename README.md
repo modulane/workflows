@@ -93,6 +93,7 @@ permissions: {}
 jobs:
   repo-check:
     name: Repo check
+    if: vars.REPO_CHECK_CLIENT_ID != ''
     uses: modulane/workflows/.github/workflows/repo-check.yml@<sha> # vX.Y.Z
     with:
       client-id: ${{ vars.REPO_CHECK_CLIENT_ID }}
@@ -100,10 +101,12 @@ jobs:
       private-key: ${{ secrets.REPO_CHECK_PRIVATE_KEY }}
 ```
 
+The `if:` skips the job in a repository where the App is not set up. The `reference` input names another reference setup than modulane/repo-template, as `owner/repo[@ref]`.
+
 - **One pull request.** Titled `ci: catch up with repo-template`, on the `repo-check` branch. It is updated when the fixes change, left alone when they do not, and closed with its branch once there is nothing left to fix. Its description ticks **No AI tool was used**: the fixes come from the reference as they are.
-- **Rulesets and settings.** No file change fixes them, so they fail the run instead, and the run's summary lists them.
+- **Rulesets, settings and security settings.** No file change fixes them, so they fail the run instead, and the run's summary lists them.
 - **Differences kept on purpose.** A repository lists them in `.github/repo-check.yml`, each with its reason, as this repository does for the names of its required checks.
-- **The App.** It needs read access to administration (rulesets and merge settings) and write access to contents, pull requests and workflows, and it is installed on the repositories that run the check. Each token is limited to the repository it runs in.
+- **The App.** It needs read access to administration (rulesets, merge and security settings) and write access to contents, pull requests and workflows, and it is installed on the repositories that run the check. Each token is limited to the repository it runs in. Outside modulane, create an App of your own with the same access, and set the same variable and secret.
 
 ## Releases
 
