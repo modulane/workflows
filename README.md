@@ -11,7 +11,7 @@ Reusable GitHub Actions workflows for modulane repositories. Each repository cal
 | `ai-disclosure.yml` | Fails until the pull request's **AI use** section says whether AI tools were used, and how, with [modulane/ai-disclosure](https://github.com/modulane/ai-disclosure).           |
 | `labels.yml`        | Syncs the repository labels from its `.github/labels.json`.                                                                                                                     |
 | `zizmor.yml`        | Audits the security of the repository's workflows.                                                                                                                              |
-| `release-notes.yml` | Adds detail to the GitHub releases: under each entry, the **Release notes** section of the pull request's description and the issues it closes.                                 |
+| `release-notes.yml` | Adds detail to the GitHub releases from the **Release notes** section of each pull request: one entry per feature or fix it lists, and the issues it closes.                    |
 
 `ci.yml` and `release.yml` stay in each repository: CI runs the repository's own checks, and the release differs between a package, an action and a monorepo. This repository runs its workflows on its own pull requests too.
 
@@ -59,8 +59,20 @@ release-notes:
     pull-requests: read # read the pull request descriptions
 ```
 
-- **Where the notes come from.** The pull request template has a **Release notes** section. Under each entry of a release, the workflow adds the text of that section, then the issues the pull request closes. An empty section, or "None", adds no text.
-- **Each release once.** A release it has handled gets a hidden `<!-- modulane/workflows release-notes -->` marker, and each run handles every release without one. The first run fills in the older releases too, and running the release workflow by hand fills in any release it missed. Editing a pull request after its release does not change that release: edit the release on GitHub instead.
+- **Where the notes come from.** The pull request template has a **Release notes** section. The workflow rebuilds each release entry that links a pull request from it, and adds the issues the pull request closes. An empty section, or "None", leaves the entry as it is.
+- **One entry per change.** Write a list to give each feature or fix its own entry, all linking the same pull request. An item that starts with `feat:`, `fix:` or `perf:` goes under that heading, so a `feat:` pull request can also list a fix. Lines indented under an item go under its entry, and text outside the list goes under the first one. A closed issue goes under the item that mentions it (`(#12)`), or else under the first entry.
+
+  ```markdown
+  ## Release notes
+
+  - fuzzy search in every menu (#12)
+  - direct mode: `dws <project> <script>` runs a script without prompts
+  - fix: Ctrl+C no longer leaves the cursor hidden
+  ```
+
+  Text that is not a list stays under the pull request's single entry.
+
+- **Rebuilt on every run.** Each release keeps the body semantic-release wrote in a hidden `<!-- modulane/workflows release-notes: … -->` marker, and every run rebuilds every release from it. The first run fills in the older releases, and a change to a pull request's notes reaches its release on the next run, or right away by running the release workflow by hand. Edit the pull request, not the release: a release edited by hand is rebuilt too.
 - **Review the notes.** They are copied from the pull request description as written, so check that section before merging, as you would the code.
 
 ## Releases
