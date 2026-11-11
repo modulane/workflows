@@ -67,7 +67,7 @@ jobs:
       # The action reads the repository and the reference through the API, so
       # nothing is checked out.
       - name: Compare and open a pull request
-        uses: modulane/repo-check@0000000000000000000000000000000000000000 # v1.0.0
+        uses: modulane/repo-check@09d2f752830ef189967748604d76531de59249fb # v1.0.0
         with:
           token: ${{ steps.token.outputs.token }}
           reference: ${{ inputs.reference || 'modulane/repo-template' }}
