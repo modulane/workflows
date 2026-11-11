@@ -1,0 +1,187 @@
+name: Release notes
+
+# Add detail to the GitHub releases that semantic-release creates. Each entry
+# there is only a squash commit title, so for every pull request an entry
+# links, this adds the "Release notes" section of the pull request's
+# description and the issues it closes, under that entry.
+#
+# A release this workflow has handled carries a hidden marker, and every run
+# handles each release that has none yet, so the first run fills in the
+# older releases too. A release is never handled twice: editing a pull
+# request's notes after its release does not change that release.
+#
+# The notes come from pull request descriptions, which anyone opening a pull
+# request writes. They only ever reach the release body as text, never a
+# shell or a script, and the maintainer reviews them before merging.
+#
+# Other repositories call this workflow from their release workflow, after
+# the release job (see the README); this repository calls it the same way.
+on:
+  workflow_call:
+
+permissions: {}
+
+jobs:
+  release-notes:
+    name: Add the pull request notes
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    # Two runs editing the same releases would add the notes twice.
+    concurrency:
+      group: release-notes
+      cancel-in-progress: false
+
+    permissions:
+      contents: write # edit the GitHub releases
+      issues: read # list the issues a pull request closes
+      pull-requests: read # read the pull request descriptions
+
+    steps:
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      # Plain Node.js with fetch, so no dependency is installed in a job that
+      # can edit releases.
+      - name: Add the notes to the releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node --input-type=module <<'SCRIPT'
+          const repo = process.env.GITHUB_REPOSITORY;
+          const apiUrl = process.env.GITHUB_API_URL ?? 'https://api.github.com';
+          const graphqlUrl = process.env.GITHUB_GRAPHQL_URL ?? `${apiUrl}/graphql`;
+          const dryRun = process.env.DRY_RUN === 'true';
+          const marker = '<!-- modulane/workflows release-notes -->';
+
+          async function request(url, options = {}) {
+            const response = await fetch(url, {
+              ...options,
+              headers: {
+                accept: 'application/vnd.github+json',
+                authorization: `Bearer ${process.env.GH_TOKEN}`,
+                'x-github-api-version': '2022-11-28',
+              },
+            });
+            if (!response.ok) {
+              throw new Error(`${options.method ?? 'GET'} ${url}: HTTP ${response.status} ${await response.text()}`);
+            }
+            return response.json();
+          }
+
+          async function releases() {
+            const all = [];
+            for (let page = 1; ; page++) {
+              const batch = await request(`${apiUrl}/repos/${repo}/releases?per_page=100&page=${page}`);
+              all.push(...batch);
+              if (batch.length < 100) return all;
+            }
+          }
+
+          // The description and closing issues of a pull request, or null
+          // when the number is an issue rather than a pull request.
+          async function pullRequest(number) {
+            const [owner, name] = repo.split('/');
+            const { data } = await request(graphqlUrl, {
+              method: 'POST',
+              body: JSON.stringify({
+                query: `query($owner: String!, $name: String!, $number: Int!) {
+                  repository(owner: $owner, name: $name) {
+                    pullRequest(number: $number) {
+                      body
+                      closingIssuesReferences(first: 20) {
+                        nodes { number url repository { nameWithOwner } }
+                      }
+                    }
+                  }
+                }`,
+                variables: { owner, name, number },
+              }),
+            });
+            return data?.repository?.pullRequest ?? null;
+          }
+
+          // The text under the "## Release notes" heading, up to the next
+          // heading of the same level or higher, without HTML comments.
+          // "None", "n/a" or "-" count as no notes.
+          function releaseNotes(body) {
+            const lines = (body ?? '')
+              .replace(/\r\n?/g, '\n')
+              .replace(/<!--[\s\S]*?-->/g, '')
+              .split('\n');
+            const start = lines.findIndex((line) => /^##\s+release notes\s*$/i.test(line.trim()));
+            if (start === -1) return '';
+            const length = lines.slice(start + 1).findIndex((line) => /^#{1,2}\s/.test(line));
+            const end = length === -1 ? lines.length : start + 1 + length;
+            const notes = lines.slice(start + 1, end).join('\n').trim();
+            return /^(none|n\/a|-)\.?$/i.test(notes) ? '' : notes;
+          }
+
+          // The pull request an entry links: the last "[#N](...)" of a list
+          // item, since the commit title can mention other numbers first,
+          // but before the ", closes [#N](...)" that a commit body adds.
+          function linkedNumber(line) {
+            if (!/^\s*[*-]\s/.test(line)) return null;
+            const entry = line.split(/, closes /i)[0];
+            const numbers = [...entry.matchAll(/\[#(\d+)\]\(/g)].map((match) => Number(match[1]));
+            return numbers.at(-1) ?? null;
+          }
+
+          // The notes, then the closed issues that the entry does not
+          // already link.
+          function details(pull, line) {
+            const lines = [];
+            const notes = releaseNotes(pull.body);
+            if (notes) lines.push(...notes.split('\n'));
+            const linked = new Set([...line.matchAll(/\[#(\d+)\]\(/g)].map((match) => Number(match[1])));
+            const closed = pull.closingIssuesReferences.nodes.filter(
+              (issue) => issue.repository.nameWithOwner !== repo || !linked.has(issue.number),
+            );
+            const issues = closed.map((issue) => {
+              const label = issue.repository.nameWithOwner === repo ? `#${issue.number}` : `${issue.repository.nameWithOwner}#${issue.number}`;
+              return `[${label}](${issue.url})`;
+            });
+            if (issues.length > 0) {
+              if (lines.length > 0) lines.push('');
+              lines.push(`Closes ${issues.join(', ')}`);
+            }
+            return lines;
+          }
+
+          for (const release of await releases()) {
+            const body = (release.body ?? '').replace(/\r\n?/g, '\n');
+            if (release.draft || body.includes(marker)) continue;
+
+            const output = [];
+            let pulls = 0;
+            let detailed = 0;
+            for (const line of body.split('\n')) {
+              output.push(line);
+              const number = linkedNumber(line);
+              if (number === null) continue;
+              const pull = await pullRequest(number);
+              if (pull === null) continue;
+              pulls++;
+              const lines = details(pull, line);
+              if (lines.length === 0) continue;
+              detailed++;
+              // Indent to the item's text, so the lines stay in its entry.
+              const indent = `${line.match(/^\s*/)[0]}  `;
+              output.push('', ...lines.map((text) => (text ? indent + text : '')), '');
+            }
+
+            const updated = `${output.join('\n').trimEnd()}\n\n${marker}\n`;
+            console.log(`${release.tag_name}: details for ${detailed} of ${pulls} pull requests`);
+            if (dryRun) {
+              console.log(updated);
+            } else {
+              await request(`${apiUrl}/repos/${repo}/releases/${release.id}`, {
+                method: 'PATCH',
+                body: JSON.stringify({ body: updated }),
+              });
+            }
+          }
+          SCRIPT
