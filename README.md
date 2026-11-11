@@ -4,14 +4,15 @@ Reusable GitHub Actions workflows for modulane repositories. Each repository cal
 
 ## What it holds
 
-| Workflow            | What it does                                                                                                                                                                    |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `pr-title.yml`      | Checks that the pull request title is a lowercase Conventional Commit. With `package-scope: true`, a monorepo's `feat:` or `fix:` title must also name the package it releases. |
-| `pr-labels.yml`     | Labels each pull request from its title (kind and `release:` label) and assigns its author, unless the author is a bot.                                                         |
-| `ai-disclosure.yml` | Fails until the pull request's **AI use** section says whether AI tools were used, and how, with [modulane/ai-disclosure](https://github.com/modulane/ai-disclosure).           |
-| `labels.yml`        | Syncs the repository labels from its `.github/labels.json`.                                                                                                                     |
-| `zizmor.yml`        | Audits the security of the repository's workflows.                                                                                                                              |
-| `release-notes.yml` | Adds detail to the GitHub releases from the **Release notes** section of each pull request: one entry per feature or fix it lists, and the issues it closes.                    |
+| Workflow            | What it does                                                                                                                                                                                                                                                                                   |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pr-title.yml`      | Checks that the pull request title is a lowercase Conventional Commit. With `package-scope: true`, a monorepo's `feat:` or `fix:` title must also name the package it releases.                                                                                                                |
+| `pr-labels.yml`     | Labels each pull request from its title (kind and `release:` label) and assigns its author, unless the author is a bot.                                                                                                                                                                        |
+| `ai-disclosure.yml` | Fails until the pull request's **AI use** section says whether AI tools were used, and how, with [modulane/ai-disclosure](https://github.com/modulane/ai-disclosure).                                                                                                                          |
+| `labels.yml`        | Syncs the repository labels from its `.github/labels.json`.                                                                                                                                                                                                                                    |
+| `zizmor.yml`        | Audits the security of the repository's workflows.                                                                                                                                                                                                                                             |
+| `release-notes.yml` | Adds detail to the GitHub releases from the **Release notes** section of each pull request: one entry per feature or fix it lists, and the issues it closes.                                                                                                                                   |
+| `repo-check.yml`    | Compares the repository with [repo-template](https://github.com/modulane/repo-template) every week, with [modulane/repo-check](https://github.com/modulane/repo-check), and keeps one pull request open with what a file change can bring back. Drift only a maintainer can fix fails the run. |
 
 `ci.yml` and `release.yml` stay in each repository: CI runs the repository's own checks, and the release differs between a package, an action and a monorepo. This repository runs its workflows on its own pull requests too.
 
@@ -74,6 +75,35 @@ release-notes:
 
 - **Rebuilt on every run.** Each release keeps the body semantic-release wrote in a hidden `<!-- modulane/workflows release-notes: … -->` marker, and every run rebuilds every release from it. The first run fills in the older releases, and a change to a pull request's notes reaches its release on the next run, or right away by running the release workflow by hand. Edit the pull request, not the release: a release edited by hand is rebuilt too.
 - **Review the notes.** They are copied from the pull request description as written, so check that section before merging, as you would the code.
+
+## Repo check
+
+`repo-check.yml` runs on a schedule in each repository. Its pull request changes workflows, and its checks must run, which `GITHUB_TOKEN` can do neither of, so it uses a token of the modulane **repo-check** GitHub App. The App's client ID is the organization variable `REPO_CHECK_CLIENT_ID`, and its private key the organization secret `REPO_CHECK_PRIVATE_KEY`.
+
+```yaml
+name: Repo check
+
+on:
+  schedule:
+    - cron: '0 5 * * 1'
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  repo-check:
+    name: Repo check
+    uses: modulane/workflows/.github/workflows/repo-check.yml@<sha> # vX.Y.Z
+    with:
+      client-id: ${{ vars.REPO_CHECK_CLIENT_ID }}
+    secrets:
+      private-key: ${{ secrets.REPO_CHECK_PRIVATE_KEY }}
+```
+
+- **One pull request.** Titled `ci: catch up with repo-template`, on the `repo-check` branch. It is updated when the fixes change, left alone when they do not, and closed with its branch once there is nothing left to fix. Its description ticks **No AI tool was used**: the fixes come from the reference as they are.
+- **Rulesets and settings.** No file change fixes them, so they fail the run instead, and the run's summary lists them.
+- **Differences kept on purpose.** A repository lists them in `.github/repo-check.yml`, each with its reason, as this repository does for the names of its required checks.
+- **The App.** It needs read access to administration (rulesets and merge settings) and write access to contents, pull requests and workflows, and it is installed on the repositories that run the check. Each token is limited to the repository it runs in.
 
 ## Releases
 
