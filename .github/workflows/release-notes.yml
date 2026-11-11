@@ -1,14 +1,22 @@
 name: Release notes
 
 # Add detail to the GitHub releases that semantic-release creates. Each entry
-# there is only a squash commit title, so for every pull request an entry
-# links, this adds the "Release notes" section of the pull request's
-# description and the issues it closes, under that entry.
+# there is only a squash commit title, so this rebuilds every entry that
+# links a pull request from the "Release notes" section of the pull
+# request's description:
 #
-# A release this workflow has handled carries a hidden marker, and every run
-# handles each release that has none yet, so the first run fills in the
-# older releases too. A release is never handled twice: editing a pull
-# request's notes after its release does not change that release.
+# - a list there gives one entry per item, so a pull request that brings
+#   several features or fixes lists each of them on its own. An item that
+#   starts with "feat:", "fix:" or "perf:" goes under that type's heading,
+#   whatever the pull request's own type;
+# - any other text goes under the pull request's entry;
+# - the issues the pull request closes go under the item that mentions them,
+#   or else under its first entry.
+#
+# Each release keeps the body semantic-release wrote in a hidden marker, and
+# every run rebuilds every release from it, so a change to a pull request's
+# notes reaches its release on the next run. Edit the pull request, not the
+# release: a release edited by hand is rebuilt too.
 #
 # The notes come from pull request descriptions, which anyone opening a pull
 # request writes. They only ever reach the release body as text, never a
@@ -27,7 +35,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
-    # Two runs editing the same releases would add the notes twice.
+    # Two runs editing the same releases at once would race.
     concurrency:
       group: release-notes
       cancel-in-progress: false
@@ -55,7 +63,10 @@ jobs:
           const apiUrl = process.env.GITHUB_API_URL ?? 'https://api.github.com';
           const graphqlUrl = process.env.GITHUB_GRAPHQL_URL ?? `${apiUrl}/graphql`;
           const dryRun = process.env.DRY_RUN === 'true';
-          const marker = '<!-- modulane/workflows release-notes -->';
+
+          // The headings semantic-release gives each type, in their order.
+          const headings = { feat: 'Features', fix: 'Bug Fixes', perf: 'Performance Improvements' };
+          const typeOf = Object.fromEntries(Object.entries(headings).map(([type, heading]) => [heading, type]));
 
           async function request(url, options = {}) {
             const response = await fetch(url, {
@@ -83,7 +94,9 @@ jobs:
 
           // The description and closing issues of a pull request, or null
           // when the number is an issue rather than a pull request.
+          const pulls = new Map();
           async function pullRequest(number) {
+            if (pulls.has(number)) return pulls.get(number);
             const [owner, name] = repo.split('/');
             const { data } = await request(graphqlUrl, {
               method: 'POST',
@@ -92,7 +105,7 @@ jobs:
                   repository(owner: $owner, name: $name) {
                     pullRequest(number: $number) {
                       body
-                      closingIssuesReferences(first: 20) {
+                      closingIssuesReferences(first: 50) {
                         nodes { number url repository { nameWithOwner } }
                       }
                     }
@@ -101,7 +114,31 @@ jobs:
                 variables: { owner, name, number },
               }),
             });
-            return data?.repository?.pullRequest ?? null;
+            const pull = data?.repository?.pullRequest ?? null;
+            pulls.set(number, pull);
+            return pull;
+          }
+
+          // The body semantic-release wrote, from the marker of an earlier
+          // run, or the body itself the first time.
+          const markerPattern = /\s*<!-- modulane\/workflows release-notes(?:: ([A-Za-z0-9+/=]*))? -->\s*$/;
+          function source(body) {
+            const match = body.match(markerPattern);
+            if (!match) return body;
+            if (match[1] !== undefined) return Buffer.from(match[1], 'base64').toString('utf8');
+            // Release notes 1.1.0 left a marker without the source and only
+            // added indented lines under the entries, so drop those.
+            // TODO: remove once no release carries that marker.
+            return body
+              .slice(0, match.index)
+              .split('\n')
+              .filter((line) => !/^\s+\S/.test(line))
+              .join('\n')
+              .replace(/^(\* .*)\n\n+(?=\* )/gm, '$1\n');
+          }
+
+          function marker(body) {
+            return `<!-- modulane/workflows release-notes: ${Buffer.from(body, 'utf8').toString('base64')} -->`;
           }
 
           // The text under the "## Release notes" heading, up to the next
@@ -120,63 +157,173 @@ jobs:
             return /^(none|n\/a|-)\.?$/i.test(notes) ? '' : notes;
           }
 
-          // The pull request an entry links: the last "[#N](...)" of a list
-          // item, since the commit title can mention other numbers first,
-          // but before the ", closes [#N](...)" that a commit body adds.
-          function linkedNumber(line) {
-            if (!/^\s*[*-]\s/.test(line)) return null;
-            const entry = line.split(/, closes /i)[0];
-            const numbers = [...entry.matchAll(/\[#(\d+)\]\(/g)].map((match) => Number(match[1]));
-            return numbers.at(-1) ?? null;
+          // The notes as items, one per top-level list item, each with its
+          // type prefix and the lines nested under it. Text outside the list
+          // is the intro.
+          function parseNotes(notes) {
+            const intro = [];
+            const items = [];
+            for (const line of notes ? notes.split('\n') : []) {
+              const item = line.match(/^[*-]\s+(.*)$/);
+              if (item) {
+                const prefix = item[1].match(/^(feat|fix|perf)(\([^)]*\))?:\s*/i);
+                items.push({
+                  type: prefix ? prefix[1].toLowerCase() : null,
+                  text: prefix ? item[1].slice(prefix[0].length) : item[1],
+                  details: [],
+                });
+              } else if (items.length > 0 && items.at(-1).details.length === 0 && /^\s+[^\s*-]/.test(line)) {
+                // A wrapped line of the item's own text.
+                items.at(-1).text += ` ${line.trim()}`;
+              } else if (items.length > 0 && (line.trim() === '' || /^\s/.test(line))) {
+                items.at(-1).details.push(line.replace(/^ {1,2}/, ''));
+              } else {
+                intro.push(line);
+              }
+            }
+            const trim = (lines) => lines.join('\n').trim();
+            return {
+              intro: trim(intro),
+              items: items.map((item) => ({ ...item, details: trim(item.details) })),
+            };
           }
 
-          // The notes, then the closed issues that the entry does not
-          // already link.
-          function details(pull, line) {
-            const lines = [];
-            const notes = releaseNotes(pull.body);
-            if (notes) lines.push(...notes.split('\n'));
-            const linked = new Set([...line.matchAll(/\[#(\d+)\]\(/g)].map((match) => Number(match[1])));
-            const closed = pull.closingIssuesReferences.nodes.filter(
-              (issue) => issue.repository.nameWithOwner !== repo || !linked.has(issue.number),
-            );
-            const issues = closed.map((issue) => {
-              const label = issue.repository.nameWithOwner === repo ? `#${issue.number}` : `${issue.repository.nameWithOwner}#${issue.number}`;
-              return `[${label}](${issue.url})`;
-            });
-            if (issues.length > 0) {
-              if (lines.length > 0) lines.push('');
-              lines.push(`Closes ${issues.join(', ')}`);
+          // An entry: "* subject ([#N](...)) ([sha](...)), closes [#M](...)".
+          // The pull request is the last "[#N](" before ", closes", since the
+          // subject can mention other numbers first.
+          function parseEntry(line) {
+            const [main, closes = ''] = line.split(/, closes (?=\[)/i);
+            const links = [...main.matchAll(/ \(\[#(\d+)\]\([^)]*\)\)/g)];
+            if (links.length === 0) return null;
+            const last = links.at(-1);
+            return {
+              number: Number(last[1]),
+              subject: main.slice(2, last.index),
+              refs: main.slice(last.index),
+              closes: [...closes.matchAll(/\[#(\d+)\]\(([^)]*)\)/g)].map((match) => ({
+                number: Number(match[1]),
+                label: `#${match[1]}`,
+                url: match[2],
+              })),
+            };
+          }
+
+          function issueLink(issue) {
+            return `[${issue.label}](${issue.url})`;
+          }
+
+          // Splits a body into its title lines and its "### Heading"
+          // sections, each with its entries and the lines under them.
+          function parseBody(body) {
+            const title = [];
+            const sections = [];
+            for (const line of body.split('\n')) {
+              const heading = line.match(/^###\s+(.*?)\s*$/);
+              if (heading) sections.push({ heading: heading[1], entries: [] });
+              else if (sections.length === 0) title.push(line);
+              else if (line.startsWith('* ')) sections.at(-1).entries.push({ line, details: '' });
+              else if (line.trim() !== '' && sections.at(-1).entries.length > 0) {
+                const entry = sections.at(-1).entries.at(-1);
+                entry.details = entry.details ? `${entry.details}\n${line.replace(/^ {1,2}/, '')}` : line.replace(/^ {1,2}/, '');
+              } else if (line.trim() !== '') sections.at(-1).entries.push({ line, details: '' });
             }
-            return lines;
+            return { title: title.join('\n').trim(), sections };
+          }
+
+          function render({ title, sections }) {
+            const parts = [title];
+            for (const { heading, entries } of sections) {
+              if (entries.length === 0) continue;
+              const lines = [`### ${heading}`, ''];
+              for (const { line, details } of entries) {
+                lines.push(line);
+                if (details) lines.push('', ...details.split('\n').map((text) => (text ? `  ${text}` : '')), '');
+              }
+              parts.push(lines.join('\n').trimEnd());
+            }
+            return `${parts.join('\n\n\n')}\n`;
+          }
+
+          // The entries a pull request's entry becomes, each with its type.
+          function entriesFor(entry, pull, type) {
+            const { intro, items } = parseNotes(releaseNotes(pull.body));
+            const issues = [...entry.closes];
+            for (const issue of pull.closingIssuesReferences.nodes) {
+              const own = issue.repository.nameWithOwner === repo;
+              if (own && issues.some((known) => known.number === issue.number)) continue;
+              issues.push({
+                number: own ? issue.number : null,
+                label: own ? `#${issue.number}` : `${issue.repository.nameWithOwner}#${issue.number}`,
+                url: issue.url,
+              });
+            }
+            const closesLine = (list) => (list.length > 0 ? `Closes ${list.map(issueLink).join(', ')}` : '');
+            const join = (...blocks) => blocks.filter(Boolean).join('\n\n');
+
+            if (items.length === 0) {
+              return [{ type, line: `* ${entry.subject}${entry.refs}`, details: join(intro, closesLine(issues)) }];
+            }
+
+            const mentions = (item, issue) =>
+              issue.number !== null && new RegExp(`#${issue.number}(?!\\d)`).test(`${item.text}\n${item.details}`);
+            const unmentioned = issues.filter((issue) => !items.some((item) => mentions(item, issue)));
+            return items.map((item, index) => ({
+              type: item.type ?? type,
+              line: `* ${item.text}${entry.refs}`,
+              details: join(index === 0 ? intro : '', item.details, index === 0 ? closesLine(unmentioned) : ''),
+            }));
+          }
+
+          async function rebuild(body) {
+            const parsed = parseBody(body);
+            const moved = [];
+            for (const section of parsed.sections) {
+              const type = typeOf[section.heading];
+              if (!type) continue;
+              const entries = [];
+              for (const original of section.entries) {
+                const entry = original.line.startsWith('* ') ? parseEntry(original.line) : null;
+                const pull = entry ? await pullRequest(entry.number) : null;
+                if (pull === null) {
+                  entries.push(original);
+                  continue;
+                }
+                for (const result of entriesFor(entry, pull, type)) {
+                  if (result.type === type) entries.push(result);
+                  else moved.push(result);
+                }
+              }
+              section.entries = entries;
+            }
+            // Items of another type go to the end of that type's section,
+            // which is added in semantic-release's order when it is missing.
+            for (const result of moved) {
+              let section = parsed.sections.find((candidate) => candidate.heading === headings[result.type]);
+              if (!section) {
+                section = { heading: headings[result.type], entries: [] };
+                const order = Object.keys(headings);
+                const after = parsed.sections.findIndex(
+                  (candidate) => !(candidate.heading in typeOf) || order.indexOf(typeOf[candidate.heading]) > order.indexOf(result.type),
+                );
+                parsed.sections.splice(after === -1 ? parsed.sections.length : after, 0, section);
+              }
+              section.entries.push(result);
+            }
+            return render(parsed);
           }
 
           for (const release of await releases()) {
+            if (release.draft) continue;
             const body = (release.body ?? '').replace(/\r\n?/g, '\n');
-            if (release.draft || body.includes(marker)) continue;
-
-            const output = [];
-            let pulls = 0;
-            let detailed = 0;
-            for (const line of body.split('\n')) {
-              output.push(line);
-              const number = linkedNumber(line);
-              if (number === null) continue;
-              const pull = await pullRequest(number);
-              if (pull === null) continue;
-              pulls++;
-              const lines = details(pull, line);
-              if (lines.length === 0) continue;
-              detailed++;
-              // Indent to the item's text, so the lines stay in its entry.
-              const indent = `${line.match(/^\s*/)[0]}  `;
-              output.push('', ...lines.map((text) => (text ? indent + text : '')), '');
+            const original = source(body);
+            const updated = `${(await rebuild(original)).trimEnd()}\n\n${marker(original)}\n`;
+            if (updated === body) {
+              console.log(`${release.tag_name}: up to date`);
+              continue;
             }
-
-            const updated = `${output.join('\n').trimEnd()}\n\n${marker}\n`;
-            console.log(`${release.tag_name}: details for ${detailed} of ${pulls} pull requests`);
+            console.log(`${release.tag_name}: updated`);
             if (dryRun) {
-              console.log(updated);
+              console.log(updated.replace(markerPattern, '\n<!-- marker -->'));
             } else {
               await request(`${apiUrl}/repos/${repo}/releases/${release.id}`, {
                 method: 'PATCH',
