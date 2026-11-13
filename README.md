@@ -101,7 +101,7 @@ jobs:
       private-key: ${{ secrets.REPO_CHECK_PRIVATE_KEY }}
 ```
 
-The `if:` skips the job in a repository where the App is not set up. The `reference` input names another reference setup than modulane/repo-template, as `owner/repo[@ref]`.
+The `if:` skips the job in a repository where the App is not set up. On the GitHub Free plan, a private repository cannot read the organization's variables and secrets, so the job is skipped there until the repository goes public. The `reference` input names another reference setup than modulane/repo-template, as `owner/repo[@ref]`.
 
 - **One pull request.** Titled `ci: catch up with repo-template`, on the `repo-check` branch. It is updated when the fixes change, left alone when they do not, and closed with its branch once there is nothing left to fix. Its description ticks **No AI tool was used**: the fixes come from the reference as they are.
 - **Rulesets, settings and security settings.** No file change fixes them, so they fail the run instead, and the run's summary lists them.
